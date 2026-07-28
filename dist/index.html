@@ -98,6 +98,21 @@
 </div>
 
 <script>
+// F11 fullscreen toggle. Tauri's window is a native OS window, not a browser
+// tab, so there's no built-in chrome intercepting F11 the way a browser
+// would - it has to be wired up explicitly via the Tauri window API.
+// Requires "withGlobalTauri": true in tauri.conf.json (exposes
+// window.__TAURI__ for plain-script use, no bundler) and the
+// "core:window:allow-set-fullscreen" permission in capabilities/default.json.
+window.addEventListener("keydown", async (e) => {
+  if (e.key !== "F11") return;
+  e.preventDefault();
+  if (!window.__TAURI__) return; // e.g. running in a plain browser tab during dev
+  const appWindow = window.__TAURI__.window.getCurrentWindow();
+  const isFs = await appWindow.isFullscreen();
+  await appWindow.setFullscreen(!isFs);
+});
+
 // ---------- Planet catalogue ----------
 // Positions come from a local Python server (Flask + REBOUND) spawned by
 // Tauri as a sidecar - real gravitational N-body integration, not just an

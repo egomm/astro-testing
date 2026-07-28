@@ -62,9 +62,23 @@ friends on Linux, Xcode CLT on macOS, VS Build Tools + WebView2 on Windows).
 2. From the project root:
    ```
    pip install -r sidecar/requirements.txt
-   pyinstaller --onefile --name orbit-server --collect-all rebound --distpath sidecar/dist sidecar/server.py
    ```
-3. Copy the frozen binary into `src-tauri/binaries/` with the exact name
+3. Locate the compiled `librebound` extension (it installs as a top-level
+   file next to the `rebound` package, not inside it) and pass it to
+   PyInstaller explicitly, since `--collect-all rebound` alone misses it -
+   see "Known risk areas" below for why:
+   ```
+   # macOS/Linux
+   LIBREBOUND=$(python -c "import glob, os, rebound; d = os.path.dirname(rebound.__file__); print(glob.glob(os.path.join(d, '..', 'librebound*'))[0])")
+   pyinstaller --onefile --name orbit-server --collect-all rebound \
+     --add-binary "${LIBREBOUND}:." --distpath sidecar/dist sidecar/server.py
+
+   # Windows (PowerShell)
+   $LIBREBOUND = python -c "import glob, os, rebound; d = os.path.dirname(rebound.__file__); print(glob.glob(os.path.join(d, '..', 'librebound*'))[0])"
+   pyinstaller --onefile --name orbit-server --collect-all rebound `
+     --add-binary "$LIBREBOUND;." --distpath sidecar/dist sidecar/server.py
+   ```
+4. Copy the frozen binary into `src-tauri/binaries/` with the exact name
    Tauri expects for your platform (find your triple with `rustc -Vv` -
    look for `host:`):
    ```
@@ -94,14 +108,20 @@ the Tauri build, and attaches everything to a draft Release as before.
 ## Known risk areas / things to sanity-check first
 
 - **REBOUND's compiled library under PyInstaller.** This bit on the first
-  real build: REBOUND loads its `librebound` shared library via `ctypes` at
-  import time rather than as a normal Python extension module, so
-  PyInstaller's static import analysis misses it entirely and the frozen
-  exe fails with `ImportError: librebound not found`. Fixed by adding
-  `--collect-all rebound` to the PyInstaller command (forces it to grab
-  everything in the package directory, binaries included, instead of
-  relying on import analysis) - already applied in the workflow and the
-  manual build steps above.
+  real build, twice. REBOUND loads its `librebound` shared library via
+  `ctypes` at import time (`os.path.dirname(__file__) + "/../librebound" +
+  suffix`) rather than as a normal Python extension module, so
+  PyInstaller's static import analysis misses it entirely - `--collect-all
+  rebound` alone doesn't fix this, because that library also isn't inside
+  the `rebound` package folder in the first place. `setup.py` installs it
+  as a separate top-level extension module (`librebound.<tag>.so` / `.pyd`
+  / `.dylib`) that sits next to the `rebound/` folder in site-packages, and
+  `--collect-all rebound` only walks files inside the package folder
+  itself, so it never picks up that sibling file. Fixed by locating the
+  compiled file explicitly and passing it to PyInstaller with
+  `--add-binary` so it lands at the bundle root, where REBOUND's
+  `../librebound<suffix>` lookup finds it the same way it would in a normal
+  install - see the workflow and manual build steps above.
 - **Antivirus false positives.** PyInstaller one-file executables
   frequently get flagged by Windows Defender and others. If the Windows
   build gets quarantined/deleted post-download, that's why - not a bug in
