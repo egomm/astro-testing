@@ -107,7 +107,12 @@ def build_simulation():
                      # be a further-accuracy upgrade, not needed here)
     for name in NAMES:
         x, y, z, vx, vy, vz = elements_to_state(ELEMENTS[name])
-        sim.add(m=ELEMENTS[name]["mass"], x=x, y=y, z=z, vx=vx, vy=vy, vz=vz, hash=name)
+        # rebound 5.x renamed the identifying-tag kwarg from `hash` to `name`
+        # (Particle.__init__ no longer accepts `hash` at all - passing it
+        # raises "unexpected keyword argument 'hash'"). `name=` still gives
+        # the same by-name lookup (sim.particles[name]) used below, on both
+        # old and new rebound.
+        sim.add(m=ELEMENTS[name]["mass"], x=x, y=y, z=z, vx=vx, vy=vy, vz=vz, name=name)
     sim.move_to_com()
     sim.integrator = "whfast"
     sim.dt = 1.0  # 1 day - comfortably small vs. Mercury's ~88-day period
