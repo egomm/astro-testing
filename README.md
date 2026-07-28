@@ -1,4 +1,5 @@
-# Solar System Orbit Viewer — Tauri + REBOUND (local Python sidecar)
+# Solar System Orbit Viewer - Tauri + REBOUND (local Python sidecar)
+_This "project" is entirely vibe coded for testing purposes._
 
 ## Architecture
 
