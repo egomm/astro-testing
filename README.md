@@ -1,27 +1,6 @@
-# Solar System Orbit Viewer — Tauri build
+# Solar System Orbit Viewer (Tauri)
 
-**Now on Tauri v2** (v1 was migrated: `Cargo.toml`/`package.json` bumped to
-v2, `tauri.conf.json` converted to the v2 schema, and a `src-tauri/capabilities/default.json`
-permissions file was added since v2 requires explicit capabilities instead
-of v1's allowlist). If you'd already set up a repo from the earlier v1 zip,
-just overwrite these files with the ones in this zip:
-`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `src-tauri/capabilities/default.json`,
-`package.json`, `.github/workflows/build.yml`.
-
-I could NOT produce the .exe directly, because this sandbox has no Rust
-toolchain and no network access (both required to install Rust/Tauri deps
-and cross-compile a Windows binary). What's here is a complete, ready-to-go
-Tauri project — building it into an .exe on your own Windows machine takes
-about 2 minutes once prerequisites are installed.
-
-## What you're getting
-- `dist/index.html` — the full app (3D solar system, Three.js, real
-  Keplerian orbital elements, time controls, drag-to-orbit camera). This is
-  the exact same file as `orbit-viewer-demo.html` I sent separately, which
-  you can already open directly in a browser to test the concept with zero
-  setup.
-- `src-tauri/` — minimal Rust/Tauri wrapper that just loads that HTML in a
-  native window. No custom Rust logic needed for this feasibility version.
+_Disclaimer: This is fully vibe coded and is meant for testing._
 
 ## Build steps (Windows)
 
@@ -122,10 +101,3 @@ release.
   (e.g. for a fully offline build), vendor `astronomy.browser.min.js` from
   the astronomy-engine GitHub repo into `dist/` and swap the `<script src>`
   tag in `dist/index.html` for a local path.
-
-## Feasibility verdict
-This is very feasible. The whole thing is ~400 lines of vanilla JS/Three.js
-running in Tauri's webview — no heavy dependencies, no native 3D code
-needed, small binary (~5-10MB), fast to iterate on. The main cost driver
-for a "real" version would be polish (better textures/lighting, moons,
-asteroid belt, more accurate ephemeris) rather than architecture risk.
