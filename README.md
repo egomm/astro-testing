@@ -1,5 +1,13 @@
 # Solar System Orbit Viewer — Tauri build
 
+**Now on Tauri v2** (v1 was migrated: `Cargo.toml`/`package.json` bumped to
+v2, `tauri.conf.json` converted to the v2 schema, and a `src-tauri/capabilities/default.json`
+permissions file was added since v2 requires explicit capabilities instead
+of v1's allowlist). If you'd already set up a repo from the earlier v1 zip,
+just overwrite these files with the ones in this zip:
+`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`, `src-tauri/capabilities/default.json`,
+`package.json`, `.github/workflows/build.yml`.
+
 I could NOT produce the .exe directly, because this sandbox has no Rust
 toolchain and no network access (both required to install Rust/Tauri deps
 and cross-compile a Windows binary). What's here is a complete, ready-to-go
@@ -64,6 +72,42 @@ tab via "Run workflow" — useful for testing before you're ready to tag a
 release.
 
 
+## Build steps (macOS)
+
+1. Install prerequisites (one-time):
+   - Xcode Command Line Tools: `xcode-select --install`
+   - Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+   - Node.js (18+): https://nodejs.org or `brew install node`
+2. From this project folder: `npm install && npm run tauri build`
+3. Output:
+   ```
+   src-tauri/target/release/bundle/macos/Solar System Orbit Viewer.app
+   src-tauri/target/release/bundle/dmg/Solar System Orbit Viewer_0.1.0_aarch64.dmg
+   ```
+   Builds for whichever chip you're on. For a universal (Intel + Apple
+   Silicon) build: `npm run tauri build -- --target universal-apple-darwin`
+   (after `rustup target add aarch64-apple-darwin x86_64-apple-darwin`).
+
+## Build steps (Linux)
+
+1. Install prerequisites (one-time, Debian/Ubuntu example — this project
+   pins Tauri v2, which needs the **4.1** webkit stack, not 4.0):
+   ```
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   sudo apt-get update
+   sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+   ```
+   Plus Node.js (18+) via your package manager or https://nodejs.org.
+2. From this project folder: `npm install && npm run tauri build`
+3. Output:
+   ```
+   src-tauri/target/release/orbit-viewer                    (standalone binary)
+   src-tauri/target/release/bundle/deb/...deb
+   src-tauri/target/release/bundle/appimage/...AppImage
+   ```
+
+## Notes on the simulation itself
 - Planet positions come from **astronomy-engine** (github.com/cosinekitty/astronomy),
   a real, actively-maintained ephemeris library — not hand-rolled two-body
   Kepler math. It's loaded client-side from jsDelivr's CDN copy of the npm

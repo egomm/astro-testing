@@ -7,6 +7,12 @@ on:
       - "v*"
   workflow_dispatch:
 
+# Needed so the built-in GITHUB_TOKEN is allowed to create/update the
+# GitHub Release. Without this, some repos default to read-only and the
+# release step fails with "Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
