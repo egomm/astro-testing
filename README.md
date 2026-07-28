@@ -31,8 +31,11 @@ version.
 - **New**: `src-tauri/binaries/` - where CI drops the frozen Python
   executable before `tauri build` runs (empty in this zip; CI populates it).
 - **Changed**: `src-tauri/src/main.rs` - now spawns the sidecar on startup
-  via `tauri-plugin-shell`, forwards its stdout/stderr into the app's own
-  console, and kills it when the window closes.
+  via `tauri-plugin-shell`, and writes its stdout/stderr (plus its own
+  startup/shutdown events and any Rust panics) to a log file, since release
+  builds have no attached console to print to. Log file location:
+  `<OS temp dir>/orbit-viewer-logs/orbit-viewer.log` (overwritten fresh each
+  launch). Also kills the sidecar when the window closes.
 - **Changed**: `src-tauri/Cargo.toml` - added `tauri-plugin-shell`.
 - **Changed**: `src-tauri/tauri.conf.json` - added `bundle.externalBin`
   (registers the sidecar) and `connect-src http://127.0.0.1:51733` in the
@@ -59,7 +62,7 @@ friends on Linux, Xcode CLT on macOS, VS Build Tools + WebView2 on Windows).
 2. From the project root:
    ```
    pip install -r sidecar/requirements.txt
-   pyinstaller --onefile --name orbit-server --distpath sidecar/dist sidecar/server.py
+   pyinstaller --onefile --name orbit-server --collect-all rebound --distpath sidecar/dist sidecar/server.py
    ```
 3. Copy the frozen binary into `src-tauri/binaries/` with the exact name
    Tauri expects for your platform (find your triple with `rustc -Vv` -
@@ -90,11 +93,15 @@ the Tauri build, and attaches everything to a draft Release as before.
 
 ## Known risk areas / things to sanity-check first
 
-- **REBOUND's C extension under PyInstaller.** It usually bundles cleanly,
-  but if the frozen binary fails to start, this is the first thing to
-  check (PyInstaller's console output during the freeze step, and the
-  app's own console output - the sidecar's stdout/stderr are forwarded
-  into it - are the first places to look).
+- **REBOUND's compiled library under PyInstaller.** This bit on the first
+  real build: REBOUND loads its `librebound` shared library via `ctypes` at
+  import time rather than as a normal Python extension module, so
+  PyInstaller's static import analysis misses it entirely and the frozen
+  exe fails with `ImportError: librebound not found`. Fixed by adding
+  `--collect-all rebound` to the PyInstaller command (forces it to grab
+  everything in the package directory, binaries included, instead of
+  relying on import analysis) - already applied in the workflow and the
+  manual build steps above.
 - **Antivirus false positives.** PyInstaller one-file executables
   frequently get flagged by Windows Defender and others. If the Windows
   build gets quarantined/deleted post-download, that's why - not a bug in

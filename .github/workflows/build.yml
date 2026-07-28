@@ -65,7 +65,7 @@ jobs:
         run: pip install -r sidecar/requirements.txt
 
       - name: Freeze the REBOUND/Flask sidecar with PyInstaller
-        run: pyinstaller --onefile --name orbit-server --distpath sidecar/dist sidecar/server.py
+        run: pyinstaller --onefile --name orbit-server --collect-all rebound --distpath sidecar/dist sidecar/server.py
 
       - name: Install sidecar binary into src-tauri/binaries (Windows)
         if: matrix.platform == 'windows-latest'
