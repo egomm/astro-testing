@@ -153,21 +153,48 @@ def positions():
     return jsonify(positions_at(jd))
 
 
+_orbit_paths_cache = None
+
+
 @app.route("/orbit-paths")
 def orbit_paths():
     """Sample each planet's position across one full period, for drawing
-    the guide ellipses. Computed once and cached; the client calls this
-    a single time at startup."""
-    steps = 200
-    result = {}
+    the guide ellipses. Cached after first call (the result never changes).
+
+    IMPORTANT: this does ONE continuous integration and takes snapshots
+    along the way, rather than starting a fresh integration-from-epoch for
+    every sample point. The earlier version called positions_at() (which
+    integrates from J2000 every time) once per sample - for Neptune's
+    ~60,000-day period sampled 200 times that was millions of wasted
+    integrator steps, and since Flask's dev server is single-threaded that
+    blocked every other request (health checks, position polling) for as
+    long as it took, which is what looked like a total freeze.
+    """
+    global _orbit_paths_cache
+    if _orbit_paths_cache is not None:
+        return jsonify(_orbit_paths_cache)
+
+    samples_per_planet = 150
+    # (t_days_since_epoch, planet_name) pairs, sorted ascending so the
+    # shared simulation only ever integrates forward - REBOUND integrates
+    # incrementally from its current time to the next requested t, so the
+    # total work is bounded by the single largest t requested (~Neptune's
+    # period), not by (samples x planets).
+    requests_ = []
     for name in NAMES:
         period = ELEMENTS[name]["period"]
-        pts = []
-        for s in range(steps + 1):
-            jd = J2000_JD + period * s / steps
-            pos = positions_at(jd)[name]
-            pts.append(pos)
-        result[name] = pts
+        for k in range(samples_per_planet + 1):
+            requests_.append((period * k / samples_per_planet, name))
+    requests_.sort(key=lambda r: r[0])
+
+    sim = build_simulation()
+    result = {name: [] for name in NAMES}
+    for t, name in requests_:
+        sim.integrate(t)
+        p = sim.particles[name]
+        result[name].append({"x": p.x, "y": p.y, "z": p.z})
+
+    _orbit_paths_cache = result
     return jsonify(result)
 
 
@@ -175,4 +202,7 @@ if __name__ == "__main__":
     # Flush immediately so the Rust side can see this line right away if it
     # ever wants to confirm the server is up by scanning stdout.
     print(f"orbit-server listening on 127.0.0.1:{PORT}", flush=True)
-    app.run(host="127.0.0.1", port=PORT)
+    # threaded=True so a slow request (e.g. the first /orbit-paths call
+    # before it's cached) can't block health checks / position polling
+    # from being answered concurrently.
+    app.run(host="127.0.0.1", port=PORT, threaded=True)
