@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <title>Solar System Orbit Viewer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/astronomy-engine@2.1.19/astronomy.browser.min.js"></script>
 <style>
   html,body{margin:0;padding:0;overflow:hidden;background:#000;font-family:'Courier New',monospace;color:#cfd8e3;}
   #canvas-holder{position:fixed;inset:0;}
@@ -40,11 +39,14 @@
 </style>
 </head>
 <body>
+<div id="startup-overlay" style="position:fixed;inset:0;background:#000;display:flex;align-items:center;justify-content:center;color:#9fb0c3;font-family:'Courier New',monospace;font-size:13px;z-index:10000;letter-spacing:1px;">
+  starting orbit-server&hellip;
+</div>
 <div id="canvas-holder"></div>
 
 <div class="panel" id="title-panel">
   <div class="t1">ORBIT VIEWER</div>
-  <div class="t2">real ephemeris / astronomy-engine</div>
+  <div class="t2">real N-body gravity / REBOUND (local)</div>
 </div>
 
 <div class="panel" id="date-panel">
@@ -97,20 +99,21 @@
 
 <script>
 // ---------- Planet catalogue ----------
-// Positions come from astronomy-engine (real perturbation-corrected ephemeris,
-// not hand-rolled two-body Kepler math) - see planetPosition() below.
-// period(days) is only used to size the orbit-path sampling loop.
-// e (eccentricity) and i (inclination, deg) below are standard reference
-// values shown in the info panel only - display info, not used for position.
+// Positions come from a local Python server (Flask + REBOUND) spawned by
+// Tauri as a sidecar - real gravitational N-body integration, not just an
+// analytic ephemeris curve. See sidecar/server.py.
+// period(days) is used for the info panel and orbit-line request; e/i are
+// standard reference values shown in the info panel only.
+const SERVER = "http://127.0.0.1:51733";
 const PLANETS = [
- {name:"Mercury", body:"Mercury", period:87.9691,   color:0x9a9a9a, size:0.11,  real:2439,  e:0.2056, i:7.00},
- {name:"Venus",   body:"Venus",   period:224.701,   color:0xe0c27a, size:0.20,  real:6052,  e:0.0068, i:3.39},
- {name:"Earth",   body:"Earth",   period:365.256,   color:0x4a90d9, size:0.21,  real:6371,  e:0.0167, i:0.00},
- {name:"Mars",    body:"Mars",    period:686.980,   color:0xc1440e, size:0.16,  real:3390,  e:0.0934, i:1.85},
- {name:"Jupiter", body:"Jupiter", period:4332.589,  color:0xd8ae82, size:0.68,  real:69911, e:0.0484, i:1.30},
- {name:"Saturn",  body:"Saturn",  period:10759.22,  color:0xe3d19c, size:0.60,  real:58232, e:0.0539, i:2.49, hasRing:true},
- {name:"Uranus",  body:"Uranus",  period:30685.4,   color:0x9fe3e8, size:0.40,  real:25362, e:0.0473, i:0.77},
- {name:"Neptune", body:"Neptune", period:60189.0,   color:0x4d6fe0, size:0.39,  real:24622, e:0.0086, i:1.77},
+ {name:"Mercury", period:87.9691,   color:0x9a9a9a, size:0.11,  real:2439,  e:0.2056, i:7.00},
+ {name:"Venus",   period:224.701,   color:0xe0c27a, size:0.20,  real:6052,  e:0.0068, i:3.39},
+ {name:"Earth",   period:365.256,   color:0x4a90d9, size:0.21,  real:6371,  e:0.0167, i:0.00},
+ {name:"Mars",    period:686.980,   color:0xc1440e, size:0.16,  real:3390,  e:0.0934, i:1.85},
+ {name:"Jupiter", period:4332.589,  color:0xd8ae82, size:0.68,  real:69911, e:0.0484, i:1.30},
+ {name:"Saturn",  period:10759.22,  color:0xe3d19c, size:0.60,  real:58232, e:0.0539, i:2.49, hasRing:true},
+ {name:"Uranus",  period:30685.4,   color:0x9fe3e8, size:0.40,  real:25362, e:0.0473, i:0.77},
+ {name:"Neptune", period:60189.0,   color:0x4d6fe0, size:0.39,  real:24622, e:0.0086, i:1.77},
 ];
 const AU = 22; // scene units per AU (compression happens via sqrt below for visibility)
 function scaleDist(a){ return Math.sqrt(a) * AU * 0.72; } // compress outer orbits so all fit reasonably
@@ -119,25 +122,48 @@ function julianDate(date){
   return date.getTime()/86400000 + 2440587.5;
 }
 
-if(typeof Astronomy === 'undefined'){
-  document.body.insertAdjacentHTML('afterbegin',
-    '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#e88;font-family:monospace;font-size:14px;text-align:center;padding:40px;z-index:9999;">'+
-    'Could not load the astronomy-engine library from the CDN.<br>This viewer needs an internet connection the first time it loads.<br>Check your connection and reload.</div>');
-  throw new Error('astronomy-engine failed to load');
+// Cache of the most recently fetched heliocentric AU position per planet,
+// updated by a throttled background fetch loop rather than once per
+// rendered frame (an HTTP round trip + N-body integration per animation
+// frame would be far too slow/chatty).
+const latestPositions = {}; // name -> {x,y,z,r}
+let fetchInFlight = false;
+let fetchSeq = 0;
+
+async function waitForServer(maxTries=40){
+  for(let i=0;i<maxTries;i++){
+    try{
+      const res = await fetch(SERVER+"/health");
+      if(res.ok) return true;
+    }catch(e){ /* server not up yet - keep retrying */ }
+    await new Promise(r=>setTimeout(r, 250));
+  }
+  return false;
 }
 
-// Cache the EQJ->ECL rotation matrix once; it's constant.
-const eqjToEcl = Astronomy.Rotation_EQJ_ECL();
+function toSceneCoords(pos){
+  // pos: {x,y,z} heliocentric AU (ecliptic). Converts to this app's scene
+  // units/orientation (same transform used everywhere else in this file).
+  const r = Math.sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z);
+  const d = scaleDist(r);
+  const ang = Math.atan2(pos.y, pos.x);
+  const horiz = Math.sqrt(pos.x*pos.x + pos.y*pos.y) || 1e-9;
+  return {
+    x: d*Math.cos(ang),
+    y: pos.z*(d/horiz),
+    z: d*Math.sin(ang),
+    r
+  };
+}
 
-// Returns heliocentric ecliptic {x,y,z,r} in AU for a planet at a given Julian Date.
-// Uses astronomy-engine's HelioVector (accurate perturbation-corrected ephemeris)
-// rather than a manual two-body Kepler solve.
-function planetPosition(p, jd){
-  const date = new Date((jd - 2440587.5) * 86400000);
-  const time = Astronomy.MakeTime(date);
-  const helioEQJ = Astronomy.HelioVector(Astronomy.Body[p.body], time);
-  const ecl = Astronomy.RotateVector(eqjToEcl, helioEQJ);
-  return { x: ecl.x, y: ecl.y, z: ecl.z, r: Math.sqrt(ecl.x*ecl.x + ecl.y*ecl.y + ecl.z*ecl.z) };
+async function fetchPositions(jd){
+  const mySeq = ++fetchSeq;
+  try{
+    const res = await fetch(`${SERVER}/positions?jd=${jd}`);
+    const data = await res.json();
+    if(mySeq !== fetchSeq) return; // a newer request has since superseded this one
+    for(const name in data){ latestPositions[name] = data[name]; }
+  }catch(e){ /* transient - next throttled tick will retry */ }
 }
 
 // ---------- Three.js scene ----------
@@ -186,27 +212,20 @@ const sunGlow = new THREE.Sprite(new THREE.SpriteMaterial({
 sunGlow.scale.set(4,4,1);
 scene.add(sunGlow);
 
-// orbit paths - sampled directly from astronomy-engine across one full period
+// orbit paths - drawn from points the server precomputed once via REBOUND
+// (see buildScene() below, which fetches /orbit-paths and calls this).
 const orbitLines = [];
-const startJD = 2451545.0; // J2000; the traced ellipse shape is (for this purpose) independent of start epoch
-function buildOrbitLine(p){
-  const pts = [];
-  const steps = 256;
-  for(let s=0;s<=steps;s++){
-    const jd = startJD + (p.period * s / steps);
-    const pos = planetPosition(p, jd);
-    const d = scaleDist(pos.r);
-    const ang = Math.atan2(pos.y, pos.x);
-    const horiz = Math.sqrt(pos.x*pos.x + pos.y*pos.y) || 1e-9;
-    pts.push(new THREE.Vector3(d*Math.cos(ang), pos.z*(d/horiz), d*Math.sin(ang)));
-  }
+function buildOrbitLine(p, samples){
+  const pts = samples.map(pos=>{
+    const s = toSceneCoords(pos);
+    return new THREE.Vector3(s.x, s.y, s.z);
+  });
   const geo = new THREE.BufferGeometry().setFromPoints(pts);
   const mat = new THREE.LineBasicMaterial({color:0x3a4a63, transparent:true, opacity:0.7});
   const line = new THREE.Line(geo, mat);
   scene.add(line);
   orbitLines.push(line);
 }
-PLANETS.forEach(buildOrbitLine);
 
 // planet meshes
 const planetMeshes = [];
@@ -289,10 +308,10 @@ renderer.domElement.addEventListener('click', e=>{
   }
 });
 function showInfo(p){
-  const pos = planetPosition(p, currentJD);
+  const pos = latestPositions[p.name];
   infoPanel.style.display='block';
   document.getElementById('infoName').textContent = p.name;
-  document.getElementById('infoDist').textContent = pos.r.toFixed(3)+' AU';
+  document.getElementById('infoDist').textContent = pos ? Math.sqrt(pos.x*pos.x+pos.y*pos.y+pos.z*pos.z).toFixed(3)+' AU' : '-';
   document.getElementById('infoPeriod').textContent = (p.period/365.25).toFixed(2)+' yr';
   document.getElementById('infoEcc').textContent = p.e.toFixed(4);
   document.getElementById('infoInc').textContent = p.i.toFixed(2)+'\u00B0';
@@ -366,22 +385,27 @@ updateDateUI();
 
 // ---------- animation loop ----------
 let lastT = performance.now();
+let lastFetchT = 0;
+const FETCH_INTERVAL_MS = 150; // throttle: don't hit the server every rendered frame
+
 function animate(now){
   requestAnimationFrame(animate);
   const dt = (now-lastT)/1000; lastT = now;
   if(playing) currentJD += speedDaysPerSec*dt;
   updateDateUI();
 
+  if(!fetchInFlight && now - lastFetchT > FETCH_INTERVAL_MS){
+    lastFetchT = now;
+    fetchInFlight = true;
+    fetchPositions(currentJD).finally(()=>{ fetchInFlight = false; });
+  }
+
   PLANETS.forEach((p, idx)=>{
-    const pos = planetPosition(p, currentJD);
-    const d = scaleDist(pos.r);
-    const ang = Math.atan2(pos.y, pos.x);
-    const horiz = Math.sqrt(pos.x*pos.x+pos.y*pos.y) || 1e-9;
-    const sx = d*Math.cos(ang);
-    const sz = d*Math.sin(ang);
-    const sy = pos.z*(d/horiz);
+    const pos = latestPositions[p.name];
+    if(!pos) return; // no data yet (first frame or two while the initial fetch is in flight)
+    const s = toSceneCoords(pos);
     const mesh = planetMeshes[idx];
-    mesh.position.set(sx, sy, sz);
+    mesh.position.set(s.x, s.y, s.z);
     mesh.rotation.y += 0.01;
 
     // project to screen for label
@@ -400,7 +424,29 @@ function animate(now){
 
   renderer.render(scene, camera);
 }
-requestAnimationFrame(animate);
+
+// ---------- startup: wait for the sidecar, load orbit paths + first positions ----------
+const startupOverlay = document.getElementById('startup-overlay');
+(async function init(){
+  const ready = await waitForServer();
+  if(!ready){
+    startupOverlay.textContent = "Could not reach the local orbit-server (127.0.0.1:51733). It may have failed to start - check the app's logs.";
+    startupOverlay.style.color = '#e88';
+    startupOverlay.style.padding = '40px';
+    startupOverlay.style.textAlign = 'center';
+    return;
+  }
+  try{
+    const res = await fetch(SERVER+"/orbit-paths");
+    const paths = await res.json();
+    PLANETS.forEach(p=> buildOrbitLine(p, paths[p.name]));
+  }catch(e){
+    console.error("failed to load orbit paths", e);
+  }
+  await fetchPositions(currentJD);
+  startupOverlay.style.display = 'none';
+  requestAnimationFrame(animate);
+})();
 
 window.addEventListener('resize', ()=>{
   camera.aspect = window.innerWidth/window.innerHeight;

@@ -1,0 +1,1 @@
+placeholder so this directory survives being zipped/committed - CI overwrites this with the real sidecar binary at build time

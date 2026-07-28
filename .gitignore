@@ -1,0 +1,9 @@
+node_modules/
+src-tauri/target/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+sidecar/dist/
+sidecar/build/
+sidecar/__pycache__/
+*.spec
+dist/*.bak

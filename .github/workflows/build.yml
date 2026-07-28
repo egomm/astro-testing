@@ -19,12 +19,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest"   # builds both Intel and Apple Silicon
-            args: "--target universal-apple-darwin"
+          # macos-latest runners are Apple Silicon; this builds a native
+          # aarch64 app only (no universal Intel+ARM binary - PyInstaller
+          # can't easily produce that for a bundled Python without a much
+          # more involved cross-build setup, so it's left out of this
+          # feasibility build).
+          - platform: "macos-latest"
+            rust_target: "aarch64-apple-darwin"
+            py_arch: "arm64"
           - platform: "ubuntu-22.04"
-            args: ""
+            rust_target: "x86_64-unknown-linux-gnu"
+            py_arch: "x64"
           - platform: "windows-latest"
-            args: ""
+            rust_target: "x86_64-pc-windows-msvc"
+            py_arch: "x64"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -33,19 +41,45 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_target }}
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Install Linux dependencies
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.py_arch }}
+
+      - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Python dependencies
+        run: pip install -r sidecar/requirements.txt
+
+      - name: Freeze the REBOUND/Flask sidecar with PyInstaller
+        run: pyinstaller --onefile --name orbit-server --distpath sidecar/dist sidecar/server.py
+
+      - name: Install sidecar binary into src-tauri/binaries (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          cp sidecar/dist/orbit-server.exe "src-tauri/binaries/orbit-server-${{ matrix.rust_target }}.exe"
+
+      - name: Install sidecar binary into src-tauri/binaries (macOS/Linux)
+        if: matrix.platform != 'windows-latest'
+        run: |
+          mkdir -p src-tauri/binaries
+          cp sidecar/dist/orbit-server "src-tauri/binaries/orbit-server-${{ matrix.rust_target }}"
+          chmod +x "src-tauri/binaries/orbit-server-${{ matrix.rust_target }}"
 
       - name: Install npm dependencies
         run: npm install
@@ -59,4 +93,4 @@ jobs:
           releaseName: "Solar System Orbit Viewer ${{ github.ref_name }}"
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          args: --target ${{ matrix.rust_target }}
