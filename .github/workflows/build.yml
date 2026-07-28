@@ -65,7 +65,34 @@ jobs:
         run: pip install -r sidecar/requirements.txt
 
       - name: Freeze the REBOUND/Flask sidecar with PyInstaller
-        run: pyinstaller --onefile --name orbit-server --collect-all rebound --distpath sidecar/dist sidecar/server.py
+        shell: bash
+        run: |
+          # REBOUND's C core isn't inside the `rebound` package folder - setup.py
+          # installs it as a separate top-level extension module (librebound.*.so /
+          # .pyd / .dylib) next to the package, and rebound/__init__.py locates it
+          # at import time with a hand-built ctypes path
+          # (os.path.dirname(__file__) + "/../librebound" + suffix). PyInstaller's
+          # static analysis can't follow that hand-built string, and the file also
+          # lives outside the `rebound/` tree, so `--collect-all rebound` - which
+          # only walks the package folder itself - never picks it up. That's why
+          # the frozen exe still throws "librebound not found" even with
+          # --collect-all rebound in place.
+          #
+          # Fix: locate the actual compiled file and hand it to PyInstaller
+          # explicitly via --add-binary, dropped at the bundle root so the
+          # "../librebound<suffix>" lookup resolves the same way it does in a
+          # normal install.
+          LIBREBOUND=$(python -c "import glob, os, rebound; d = os.path.dirname(rebound.__file__); matches = glob.glob(os.path.join(d, '..', 'librebound*')); print(matches[0]) if matches else exit('Could not locate the compiled librebound extension next to ' + d)")
+          echo "Found librebound at: $LIBREBOUND"
+
+          SEP=":"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            SEP=";"
+          fi
+
+          pyinstaller --onefile --name orbit-server --collect-all rebound \
+            --add-binary "${LIBREBOUND}${SEP}." \
+            --distpath sidecar/dist sidecar/server.py
 
       - name: Install sidecar binary into src-tauri/binaries (Windows)
         if: matrix.platform == 'windows-latest'
